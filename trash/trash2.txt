@@ -1,0 +1,166 @@
+#include <iostream>
+#include <unistd.h>
+#include <cstring> // for strerror
+#include <sys/socket.h>
+#include <fcntl.h> // for fcntl
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <pthread.h>
+
+#include "../Logger.h"
+
+const int SERVERPORT = 9898;
+const char *IP = "127.0.0.1";
+
+struct sockaddr_in serverAddr = {0}, clientAddr = {0};
+pthread_t ptId = 0;
+int socketFd = 0;
+bool isRunning = true;
+
+// Reusable function to check for any error:
+void check(int status, const std::string &error)
+{
+    if (status == -1)
+    {
+        std::cerr << error << ":" << strerror(errno) << std::endl;
+
+        if (ptId > 0)
+        {
+            isRunning = false;
+            pthread_join(ptId, NULL);
+        }
+
+        if (socketFd > 0)
+        {
+            close(socketFd);
+        }
+
+        exit(EXIT_FAILURE);
+    }
+}
+
+// The function that will inside the thread:
+void *recieveFunction(void *d)
+{
+    // struct sockaddr_in *client_adress = (struct sockaddr_in *)clientAddr;
+    socklen_t sizeClient = sizeof(clientAddr);
+
+    char buffer[1024]; // To hold the received message.
+
+    while (isRunning)
+    {
+        ssize_t bytes_received = recvfrom(socketFd, &buffer, sizeof(buffer), 0, (struct sockaddr *)&clientAddr, &sizeClient);
+        if (bytes_received > 0)
+        {
+            buffer[bytes_received] = '\0';
+            // std::cout << "Received: " << buffer << std::endl;
+        }
+        else
+        {
+            sleep(1);
+        }
+    }
+
+    return NULL;
+}
+
+int main(void)
+{
+
+    int flags = 0;
+    socklen_t sizeClient = sizeof(clientAddr);
+    socklen_t sizeServer = sizeof(serverAddr);
+
+    // config for socket:
+    serverAddr.sin_family = AF_INET;
+    serverAddr.sin_addr.s_addr = inet_addr(IP);
+    serverAddr.sin_port = htons(SERVERPORT);
+
+    check(socketFd = socket(AF_INET, SOCK_DGRAM, 0), "socket()");
+
+    // Make the socket non-blocking:
+    check(flags = fcntl(socketFd, F_GETFL, 0), "fcntl(get flags if any)");
+    check(fcntl(socketFd, F_SETFL, flags | O_NONBLOCK), "fcntl(set flags)");
+
+    check(bind(socketFd, (struct sockaddr *)&serverAddr, sizeServer), "bind()");
+
+    std::cout << "Server listening on port " << SERVERPORT << std::endl;
+
+    // create a pthread to recieve data from the client.
+    if (pthread_create(&ptId, NULL, recieveFunction, &clientAddr) != 0)
+    {
+        std::cerr << "pthread_create()" << strerror(errno) << std::endl;
+    }
+
+    // To send data the client.
+    char buffer[] = "WARNING";
+    ssize_t bytes_sent;
+
+    // char buf[1024];
+    int buff;
+    int len;
+    int level;
+    bool is_running = true;
+
+    while (isRunning == true)
+    {
+        std::cout << "--- User Menu ---" << std::endl;
+        std::cout << "1. Set the log level: " << std::endl;
+        std::cout << "2. Dump the log file here: " << std::endl;
+        std::cout << "3. Shut down: " << std::endl;
+
+        int choice;
+        std::cout << "Enter your choice: ";
+        std::cin >> choice;
+
+        switch (choice)
+        {
+        case 1:
+            std::cout << "--- User Menu ---" << std::endl;
+            std::cout << "1. Set the log level" << std::endl;
+            std::cout << "2. Dump the log file here" << std::endl;
+            std::cout << "3. Shut down" << std::endl;
+
+            std::cout << "Enter log level: ";
+            std::cin >> buff;
+
+            // If the client is not connected donot send().
+            if (clientAddr.sin_family != 0 && clientAddr.sin_addr.s_addr != 0 && clientAddr.sin_port != 0)
+                check(bytes_sent = sendto(socketFd, &buff, sizeof(buff), 0, (const struct sockaddr *)&clientAddr, sizeClient), "sendto()");
+
+            break;
+
+        case 2:
+            // Open and read the log file
+
+            std::cout << "Press any key to continue:";
+            std::cin.ignore();
+            std::cin.get(); // Wait for user to press Enter
+            break;
+
+        case 3:
+            is_running = false;
+            std::cout << is_running;
+            break;
+
+        default:
+            std::cout << "\nInvalid choice. Please try again.\n" << std::endl;
+            break;
+        }
+    }
+
+    // while (isRunning)
+    // {
+
+    //     // Send response back to client
+    //     const char *message = "Hello, Hasan!";
+    //     // This if statement is to prevent the server from crashing, as the socket is non-block, client might not establish a connection.
+    //     if (clientAddr.sin_family != 0 && clientAddr.sin_addr.s_addr != 0 && clientAddr.sin_port != 0)
+    //         check(bytes_sent = sendto(socketFd, message, strlen(message), 0, (const struct sockaddr *)&clientAddr, sizeClient), "sendto()");
+    //     // sleep(1);
+    // }
+
+    close(socketFd);
+
+    return EXIT_SUCCESS;
+}

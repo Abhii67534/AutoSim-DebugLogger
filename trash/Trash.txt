@@ -1,0 +1,166 @@
+#include <iostream>
+#include <unistd.h>
+#include <cstring> // for strerror
+#include <sys/socket.h>
+#include <fcntl.h> // for fcntl
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <pthread.h>
+#include "./Logger.h"
+
+#define SERVERPORT 9898
+char *ip = "127.0.0.1";
+
+LOG_LEVEL logLevel = DEBUG;
+int flags = 0;
+
+int socketFd = 0;
+struct sockaddr_in serverAddr = {0};
+
+pthread_t ptId = 0;
+bool isRunning = true;
+
+
+void check(int status, const std::string &error)
+{
+    // std::cout << "checking " << error << status << std::endl;
+    if (status == -1)
+    {
+        // std::cerr << "check-error\n";
+
+        std::cerr << error << ":" << strerror(errno) << std::endl;
+
+        if (ptId > 0)
+        {
+            isRunning = false;
+            pthread_join(ptId, NULL);
+        }
+
+        if (socketFd > 0)
+        {
+            close(socketFd);
+        }
+
+        exit(EXIT_FAILURE);
+    }
+}
+
+void *threadFun(void *)
+{
+    ssize_t bytes_received;
+    char buffer[244];
+    socklen_t size = sizeof(serverAddr);
+    while (isRunning)
+    {
+        bytes_received = recvfrom(socketFd, buffer, sizeof(buffer), 0, (struct sockaddr *)&serverAddr, &size);
+
+        if (bytes_received < 0)
+        {
+            std::cout << "sleeping for 1 sec \n";
+            sleep(1);
+        }
+        else
+        {
+
+            // SetLogLevel((LOG_LEVEL)buffer);
+            buffer[bytes_received] = '\0'; // Null-terminate the received data
+            std::cout << "Received: " << buffer << std::endl;
+            sleep(1);
+        }
+        // if (bytes_received == -1)
+        // {
+        //     if (errno == EAGAIN || errno == EWOULDBLOCK)
+        //     {
+        //         std::cout << "No data available, sleeping for 1 second\n";
+        //         sleep(1);
+        //     }
+        //     else
+        //     {
+        //         std::cerr << "recvfrom() error: " << strerror(errno) << std::endl;
+        //         break; // Exit the loop on error
+        //     }
+        // }
+        // else if (bytes_received == 0)
+        // {
+        //     std::cout << "Connection closed by peer\n";
+        //     break; // Exit the loop on connection closed
+        // }
+        // else
+        // {
+        //     //SetLogLevel(WARNING);
+        //     buffer[bytes_received] = '\0'; // Null-terminate the received data
+        //     std::cout << "Received: " << buffer << std::endl;
+        //     sleep(1);
+        // }
+    }
+
+    std::cout << buffer << std::endl;
+
+    pthread_exit(EXIT_SUCCESS);
+}
+
+void InitializeLog()
+{
+
+    serverAddr.sin_family = AF_INET;
+    serverAddr.sin_addr.s_addr = inet_addr(ip);
+    serverAddr.sin_port = htons(SERVERPORT);
+
+    check(socketFd = socket(AF_INET, SOCK_DGRAM, 0), "socket()");
+
+    // Make the socket non-blocking:
+    check(flags = fcntl(socketFd, F_GETFL, 0), "fcntl(get flags if any)");
+    check(fcntl(socketFd, F_SETFL, flags | O_NONBLOCK), "fcntl(set flags)");
+
+    // create a pthread to recieve data from the server.
+    if (pthread_create(&ptId, NULL, threadFun, NULL) != 0)
+    {
+        std::cerr << "pthread_create()" << strerror(errno) << std::endl;
+    }
+
+    /*
+        The job of this function is to create socket file and start a thread in the process. Then the process will be on its own
+        (as we are not using exit or return in the function. we will handle the closing of the thread seperately).
+        The socket file is already in the system.
+    */
+
+    /*
+        why did we use thread in the client side.
+        we need to do 2 things: send logs and recieve Log_Level from the server.
+        We then usully use multi thread.
+
+        The thread will continoulsy listen to the server for any log-level changes.
+        while thw client also collects logs and send tehm to the server. (server also listens and sends)
+    */
+}
+
+void SetLogLevel(LOG_LEVEL _level)
+{
+    logLevel = _level;
+}
+
+void Log(LOG_LEVEL _level, const std::string &_file, const std::string &_func, int _line, const std::string &_msg)
+{
+    // std::cout<<"log\n";
+    if (isRunning == true)
+    {
+        // std::cout<<"inside-log\n";
+        ssize_t bytes_sent;
+        if (_level)
+        {
+            // std::cout << "Level: " << _level << ", File: " << _file << ", Function: " << _func << ", Line: " << _line << ", Message: " << _msg << std::endl;
+            const char *message = "Hello, world!";
+            check(bytes_sent = sendto(socketFd, message, strlen(message), 0, (struct sockaddr *)&serverAddr, sizeof(serverAddr)), "sendto()");
+        }
+    }
+}
+
+void ExitLog()
+{
+    std::cout << "exiting\n";
+
+    isRunning = false;
+    pthread_join(ptId, NULL);
+
+    close(socketFd);
+}
